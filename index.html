@@ -17,83 +17,111 @@
         }
     </script>
 
-    <!-- Supabase JS Client -->
-    <script type="module">
-        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-
-        // Connect using custom endpoint fallback compatible with Discord Sandbox
-        const SUPABASE_URL = 'https://hvnquoqpadrtuyzbosmd.supabase.co';
-        const SUPABASE_KEY = 'sb_publishable_1_OPff-uwu9rWTTNd3pR2g_yNqcy_T6';
-
-        const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
-            realtime: {
-                params: {
-                    eventsPerSecond: 25
-                }
-            }
-        });
-
+    <!-- Pusher JS Client with HTTP & SockJS Fallback Support -->
+    <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
+    <script>
         const myPlayerId = 'p_' + Math.random().toString(36).substring(2, 9);
         const myName = 'Player ' + myPlayerId.substring(2, 6);
         window.myId = myPlayerId;
         window.myName = myName;
 
-        const channel = supabase.channel('aria_skribbl_match', {
-            config: {
-                broadcast: { self: false },
-                presence: { key: myPlayerId }
-            }
+        // Initialize Pusher with fallback transport protocols for Discord mobile sandbox
+        const pusher = new Pusher('5fd7c719f41d34fff220', {
+            cluster: 'ap2',
+            forceTLS: true,
+            enabledTransports: ['ws', 'xhr_streaming', 'xhr_polling', 'sockjs']
         });
 
+        // Use client-event allowed channel
+        const channel = pusher.subscribe('cache-aria-skribbl-match');
         window.channel = channel;
         window.activePlayers = [];
 
-        // Track Active Users via Presence
-        channel.on('presence', { event: 'sync' }, () => {
-            const state = channel.presenceState();
-            const players = [];
-            for (let id in state) {
-                if (state[id] && state[id][0]) {
-                    players.push(state[id][0]);
-                }
+        // Receive Heartbeat / Ping from other players
+        channel.bind('client-ping', (data) => {
+            if (!data || !data.id) return;
+            registerPlayer(data.id, data.name, data.joinedAt);
+            // Respond back so the new player knows we exist
+            if (data.isNewJoin) {
+                channel.trigger('client-pong', {
+                    id: window.myId,
+                    name: window.myName,
+                    joinedAt: window.myJoinedAt
+                });
             }
-            window.activePlayers = players;
-            window.updateLobby(players);
         });
 
-        // Drawing Stroke Listener
-        channel.on('broadcast', { event: 'stroke' }, ({ payload }) => {
+        // Receive Pong back
+        channel.bind('client-pong', (data) => {
+            if (!data || !data.id) return;
+            registerPlayer(data.id, data.name, data.joinedAt);
+        });
+
+        // Receive Drawing Strokes
+        channel.bind('client-stroke', (data) => {
             if (window.drawLine) {
-                window.drawLine(payload.x0, payload.y0, payload.x1, payload.y1, payload.color);
+                window.drawLine(data.x0, data.y0, data.x1, data.y1, data.color);
             }
         });
 
-        // Clear Canvas Listener
-        channel.on('broadcast', { event: 'clear' }, () => {
+        // Receive Clear Canvas
+        channel.bind('client-clear', () => {
             if (window.rawClear) window.rawClear();
         });
 
-        // Round Initialized Listener
-        channel.on('broadcast', { event: 'round_started' }, ({ payload }) => {
-            window.handleRoundStarted(payload);
+        // Receive Round Initialization
+        channel.bind('client-round-started', (data) => {
+            window.handleRoundStarted(data);
         });
 
-        // Word Selected Listener
-        channel.on('broadcast', { event: 'word_chosen' }, ({ payload }) => {
-            window.handleWordChosen(payload);
+        // Receive Word Picked
+        channel.bind('client-word-chosen', (data) => {
+            window.handleWordChosen(data);
         });
 
-        // Chat & Guess Listener
-        channel.on('broadcast', { event: 'guess' }, ({ payload }) => {
-            if (window.appendChat) window.appendChat(payload.sender, payload.text, payload.isCorrect);
+        // Receive Chat Guesses
+        channel.bind('client-guess', (data) => {
+            if (window.appendChat) window.appendChat(data.sender, data.text, data.isCorrect);
         });
 
-        // Join presence tracking once subscribed
-        channel.subscribe(async (status) => {
-            if (status === 'SUBSCRIBED') {
-                window.channelReady = true;
-                await channel.track({ id: myPlayerId, name: myName, joinedAt: Date.now() });
+        window.myJoinedAt = Date.now();
+        registerPlayer(window.myId, window.myName, window.myJoinedAt);
+
+        function registerPlayer(id, name, joinedAt) {
+            const existing = window.activePlayers.find(p => p.id === id);
+            if (!existing) {
+                window.activePlayers.push({ id, name, joinedAt: joinedAt || Date.now(), lastSeen: Date.now() });
+            } else {
+                existing.lastSeen = Date.now();
             }
+            window.updateLobby();
+        }
+
+        // Announce presence once connected
+        channel.bind('pusher:subscription_succeeded', () => {
+            window.channelReady = true;
+            channel.trigger('client-ping', {
+                id: window.myId,
+                name: window.myName,
+                joinedAt: window.myJoinedAt,
+                isNewJoin: true
+            });
+
+            // Keep presence updated every 4 seconds
+            setInterval(() => {
+                if (window.channelReady) {
+                    channel.trigger('client-ping', {
+                        id: window.myId,
+                        name: window.myName,
+                        joinedAt: window.myJoinedAt,
+                        isNewJoin: false
+                    });
+                }
+                // Prune players inactive for > 10 seconds
+                const now = Date.now();
+                window.activePlayers = window.activePlayers.filter(p => (now - p.lastSeen) < 10000);
+                window.updateLobby();
+            }, 4000);
         });
     </script>
 
@@ -182,7 +210,6 @@
             display: block; 
         }
 
-        /* Overlay for waiting room and word pick */
         #game-modal { 
             position: absolute; 
             inset: 0; 
@@ -401,10 +428,10 @@
             });
         });
 
-        // Presence & Matchmaking logic
-        window.updateLobby = (players) => {
-            const count = players.length;
-            document.getElementById('player-badge').innerText = `Players: ${count}/4`;
+        window.updateLobby = () => {
+            const count = window.activePlayers.length;
+            const badge = document.getElementById('player-badge');
+            if (badge) badge.innerText = `Players: ${count}/4`;
 
             if (count < 4 && !gameInProgress) {
                 document.getElementById('game-modal').style.display = 'flex';
@@ -412,28 +439,28 @@
                 document.getElementById('modal-desc').innerText = `Need 4 players to start (${count}/4 joined)`;
                 document.getElementById('modal-content').innerHTML = "";
             } else if (count >= 4 && !gameInProgress) {
-                // Determine host deterministically (oldest joined player)
-                const host = [...players].sort((a, b) => a.joinedAt - b.joinedAt)[0];
-                if (host.id === window.myId) {
-                    triggerNextRound(players);
+                // Oldest joined player acts as host to trigger the round
+                const host = [...window.activePlayers].sort((a, b) => a.joinedAt - b.joinedAt)[0];
+                if (host && host.id === window.myId) {
+                    triggerNextRound(window.activePlayers);
                 }
             }
         };
 
-        // Host randomly selects a drawer from active players
         function triggerNextRound(players) {
             gameInProgress = true;
             const chosenIndex = Math.floor(Math.random() * players.length);
             const drawer = players[chosenIndex];
 
-            // Pick 3 words
             const choices = [...WORD_POOL].sort(() => 0.5 - Math.random()).slice(0, 3);
 
-            window.channel.send({
-                type: 'broadcast',
-                event: 'round_started',
-                payload: { drawerId: drawer.id, drawerName: drawer.name, choices }
-            });
+            if (window.channel && window.channelReady) {
+                window.channel.trigger('client-round-started', {
+                    drawerId: drawer.id,
+                    drawerName: drawer.name,
+                    choices: choices
+                });
+            }
 
             window.handleRoundStarted({ drawerId: drawer.id, drawerName: drawer.name, choices });
         }
@@ -465,11 +492,13 @@
                         modal.style.display = 'none';
                         document.getElementById('word-display').innerText = word;
                         
-                        window.channel.send({
-                            type: 'broadcast',
-                            event: 'word_chosen',
-                            payload: { wordLength: word.length, secretWord: word, drawerName }
-                        });
+                        if (window.channel && window.channelReady) {
+                            window.channel.trigger('client-word-chosen', {
+                                wordLength: word.length,
+                                secretWord: word,
+                                drawerName: drawerName
+                            });
+                        }
                     };
                     content.appendChild(btn);
                 });
@@ -509,11 +538,9 @@
 
             drawLine(prevX, prevY, currX, currY, currentColor);
 
-            if (window.channel) {
-                window.channel.send({
-                    type: 'broadcast',
-                    event: 'stroke',
-                    payload: { x0: prevX, y0: prevY, x1: currX, y1: currY, color: currentColor }
+            if (window.channel && window.channelReady) {
+                window.channel.trigger('client-stroke', {
+                    x0: prevX, y0: prevY, x1: currX, y1: currY, color: currentColor
                 });
             }
 
@@ -539,8 +566,8 @@
 
         function clearCanvas() {
             window.rawClear();
-            if (window.channel) {
-                window.channel.send({ type: 'broadcast', event: 'clear' });
+            if (window.channel && window.channelReady) {
+                window.channel.trigger('client-clear', {});
             }
         }
 
@@ -554,20 +581,19 @@
 
             window.appendChat(window.myName, text, isMatch);
 
-            if (window.channel) {
-                window.channel.send({
-                    type: 'broadcast',
-                    event: 'guess',
-                    payload: { sender: window.myName, text, isCorrect: isMatch }
+            if (window.channel && window.channelReady) {
+                window.channel.trigger('client-guess', {
+                    sender: window.myName,
+                    text: text,
+                    isCorrect: isMatch
                 });
             }
 
-            // If guessed correctly, prepare next round
             if (isMatch) {
                 setTimeout(() => {
                     if (window.activePlayers && window.activePlayers.length >= 4) {
                         const host = [...window.activePlayers].sort((a, b) => a.joinedAt - b.joinedAt)[0];
-                        if (host.id === window.myId) {
+                        if (host && host.id === window.myId) {
                             triggerNextRound(window.activePlayers);
                         }
                     }
