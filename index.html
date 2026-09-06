@@ -13,66 +13,86 @@
             await window.discordSdk.ready();
             console.log("Discord SDK ready");
         } catch(e) {
-            console.warn("Running outside Discord:", e);
+            console.warn("Running standalone:", e);
         }
     </script>
 
-    <!-- Supabase JS Client via CDN -->
+    <!-- Supabase JS Client -->
     <script type="module">
         import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
 
+        // Connect using custom endpoint fallback compatible with Discord Sandbox
         const SUPABASE_URL = 'https://hvnquoqpadrtuyzbosmd.supabase.co';
         const SUPABASE_KEY = 'sb_publishable_1_OPff-uwu9rWTTNd3pR2g_yNqcy_T6';
 
         const supabase = createClient(SUPABASE_URL, SUPABASE_KEY, {
             realtime: {
                 params: {
-                    eventsPerSecond: 30
+                    eventsPerSecond: 25
                 }
             }
         });
 
-        const channel = supabase.channel('aria_skribbl_global', {
+        const myPlayerId = 'p_' + Math.random().toString(36).substring(2, 9);
+        const myName = 'Player ' + myPlayerId.substring(2, 6);
+        window.myId = myPlayerId;
+        window.myName = myName;
+
+        const channel = supabase.channel('aria_skribbl_match', {
             config: {
-                broadcast: {
-                    self: false,
-                    ack: false
-                }
+                broadcast: { self: false },
+                presence: { key: myPlayerId }
             }
         });
 
         window.channel = channel;
-        window.channelReady = false;
+        window.activePlayers = [];
 
+        // Track Active Users via Presence
+        channel.on('presence', { event: 'sync' }, () => {
+            const state = channel.presenceState();
+            const players = [];
+            for (let id in state) {
+                if (state[id] && state[id][0]) {
+                    players.push(state[id][0]);
+                }
+            }
+            window.activePlayers = players;
+            window.updateLobby(players);
+        });
+
+        // Drawing Stroke Listener
         channel.on('broadcast', { event: 'stroke' }, ({ payload }) => {
             if (window.drawLine) {
                 window.drawLine(payload.x0, payload.y0, payload.x1, payload.y1, payload.color);
             }
         });
 
+        // Clear Canvas Listener
         channel.on('broadcast', { event: 'clear' }, () => {
             if (window.rawClear) window.rawClear();
         });
 
-        channel.on('broadcast', { event: 'new_round' }, ({ payload }) => {
-            if (window.onRemoteNewRound) window.onRemoteNewRound(payload);
+        // Round Initialized Listener
+        channel.on('broadcast', { event: 'round_started' }, ({ payload }) => {
+            window.handleRoundStarted(payload);
         });
 
+        // Word Selected Listener
+        channel.on('broadcast', { event: 'word_chosen' }, ({ payload }) => {
+            window.handleWordChosen(payload);
+        });
+
+        // Chat & Guess Listener
         channel.on('broadcast', { event: 'guess' }, ({ payload }) => {
             if (window.appendChat) window.appendChat(payload.sender, payload.text, payload.isCorrect);
         });
 
-        channel.subscribe((status, err) => {
-            console.log("Supabase Realtime Status:", status);
+        // Join presence tracking once subscribed
+        channel.subscribe(async (status) => {
             if (status === 'SUBSCRIBED') {
                 window.channelReady = true;
-                const statusEl = document.getElementById('role-status');
-                if (statusEl && statusEl.innerText === 'Connecting...') {
-                    statusEl.innerText = 'Spectating';
-                }
-            }
-            if (err) {
-                console.error("Supabase Error:", err);
+                await channel.track({ id: myPlayerId, name: myName, joinedAt: Date.now() });
             }
         });
     </script>
@@ -125,18 +145,15 @@
             padding: 0 8px; 
         }
 
-        #start-round-btn { 
-            background: #23a55a; 
-            color: #fff; 
-            padding: 8px 12px; 
-            border: none; 
+        #player-badge { 
+            background: #313338; 
+            color: #dbdee1; 
+            padding: 6px 10px; 
             border-radius: 6px; 
+            font-size: 11px; 
             font-weight: bold; 
-            cursor: pointer; 
-            font-size: 12px; 
             white-space: nowrap; 
         }
-        #start-round-btn:active { transform: scale(0.96); }
 
         .main-container { 
             flex: 1; 
@@ -164,18 +181,20 @@
             cursor: crosshair; 
             display: block; 
         }
-        
-        #choice-modal { 
+
+        /* Overlay for waiting room and word pick */
+        #game-modal { 
             position: absolute; 
             inset: 0; 
             background: rgba(0,0,0,0.85); 
-            display: none; 
+            display: flex; 
             flex-direction: column; 
             align-items: center; 
             justify-content: center; 
             gap: 14px; 
             z-index: 50; 
             padding: 16px;
+            text-align: center;
         }
 
         .btn-choice { 
@@ -225,7 +244,6 @@
             font-weight: 600; 
             font-size: 12px; 
         }
-        .btn-clear:active { transform: scale(0.95); }
 
         #chat-section { 
             height: 140px; 
@@ -248,6 +266,7 @@
         }
 
         .chat-msg { color: #dbdee1; word-break: break-word; }
+        .chat-system { color: #f1c40f; font-weight: bold; font-size: 12px; }
         .chat-correct { color: #57f287; font-weight: bold; background: rgba(87, 242, 135, 0.1); padding: 3px 6px; border-radius: 4px; }
         
         #chat-input-row { 
@@ -278,24 +297,24 @@
             font-weight: bold; 
             font-size: 13px; 
         }
-        #chat-btn:active { background: #4752c4; }
     </style>
 </head>
 <body>
 
     <header>
-        <div id="role-status">Connecting...</div>
-        <div id="word-display">_ _ _ _</div>
-        <button id="start-round-btn">I Wanna Draw!</button>
+        <div id="role-status">Lobby</div>
+        <div id="word-display">WAITING</div>
+        <div id="player-badge">Players: 1/4</div>
     </header>
 
     <div class="main-container">
         <div id="canvas-wrapper">
             <canvas id="paintCanvas"></canvas>
             
-            <div id="choice-modal">
-                <h3 style="margin-bottom: 4px; color:#fff;">Pick a Secret Word</h3>
-                <div id="choices-container" style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;"></div>
+            <div id="game-modal">
+                <h3 id="modal-title" style="margin-bottom: 4px; color:#fff;">Waiting for players...</h3>
+                <p id="modal-desc" style="color:#aaa; font-size:14px; margin-bottom:8px;">Need at least 4 players to start.</p>
+                <div id="modal-content" style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;"></div>
             </div>
         </div>
 
@@ -331,6 +350,7 @@
         let isDrawer = false;
         let currentSecretWord = "";
         let prevX = 0, prevY = 0;
+        let gameInProgress = false;
 
         function resizeCanvas() {
             if (!canvas) return;
@@ -345,15 +365,13 @@
             canvas = document.getElementById('paintCanvas');
             ctx = canvas.getContext('2d');
             resizeCanvas();
-
             window.addEventListener('resize', resizeCanvas);
 
-            // Desktop Mouse Listeners
+            // Pointer input handlers
             canvas.addEventListener('mousedown', (e) => startStroke(e.clientX, e.clientY));
             canvas.addEventListener('mousemove', (e) => moveStroke(e.clientX, e.clientY));
-            window.addEventListener('mouseup', endStroke);
+            window.addEventListener('mouseup', () => isDrawing = false);
 
-            // Mobile Touch Listeners
             canvas.addEventListener('touchstart', (e) => {
                 e.preventDefault();
                 const t = e.touches[0];
@@ -366,9 +384,8 @@
                 moveStroke(t.clientX, t.clientY);
             }, { passive: false });
 
-            window.addEventListener('touchend', endStroke);
+            window.addEventListener('touchend', () => isDrawing = false);
 
-            document.getElementById('start-round-btn').addEventListener('click', startNewRound);
             document.getElementById('clear-btn').addEventListener('click', clearCanvas);
             document.getElementById('chat-btn').addEventListener('click', sendGuess);
             document.getElementById('chat-input').addEventListener('keydown', (e) => {
@@ -383,6 +400,98 @@
                 });
             });
         });
+
+        // Presence & Matchmaking logic
+        window.updateLobby = (players) => {
+            const count = players.length;
+            document.getElementById('player-badge').innerText = `Players: ${count}/4`;
+
+            if (count < 4 && !gameInProgress) {
+                document.getElementById('game-modal').style.display = 'flex';
+                document.getElementById('modal-title').innerText = "Waiting for players...";
+                document.getElementById('modal-desc').innerText = `Need 4 players to start (${count}/4 joined)`;
+                document.getElementById('modal-content').innerHTML = "";
+            } else if (count >= 4 && !gameInProgress) {
+                // Determine host deterministically (oldest joined player)
+                const host = [...players].sort((a, b) => a.joinedAt - b.joinedAt)[0];
+                if (host.id === window.myId) {
+                    triggerNextRound(players);
+                }
+            }
+        };
+
+        // Host randomly selects a drawer from active players
+        function triggerNextRound(players) {
+            gameInProgress = true;
+            const chosenIndex = Math.floor(Math.random() * players.length);
+            const drawer = players[chosenIndex];
+
+            // Pick 3 words
+            const choices = [...WORD_POOL].sort(() => 0.5 - Math.random()).slice(0, 3);
+
+            window.channel.send({
+                type: 'broadcast',
+                event: 'round_started',
+                payload: { drawerId: drawer.id, drawerName: drawer.name, choices }
+            });
+
+            window.handleRoundStarted({ drawerId: drawer.id, drawerName: drawer.name, choices });
+        }
+
+        window.handleRoundStarted = ({ drawerId, drawerName, choices }) => {
+            gameInProgress = true;
+            window.rawClear();
+            isDrawer = (drawerId === window.myId);
+
+            const modal = document.getElementById('game-modal');
+            const title = document.getElementById('modal-title');
+            const desc = document.getElementById('modal-desc');
+            const content = document.getElementById('modal-content');
+
+            if (isDrawer) {
+                document.getElementById('role-status').innerText = "Drawing";
+                document.getElementById('toolbar').style.display = 'flex';
+                modal.style.display = 'flex';
+                title.innerText = "You are the Drawer!";
+                desc.innerText = "Select one word to draw:";
+                content.innerHTML = "";
+
+                choices.forEach(word => {
+                    const btn = document.createElement('button');
+                    btn.className = 'btn-choice';
+                    btn.innerText = word;
+                    btn.onclick = () => {
+                        currentSecretWord = word;
+                        modal.style.display = 'none';
+                        document.getElementById('word-display').innerText = word;
+                        
+                        window.channel.send({
+                            type: 'broadcast',
+                            event: 'word_chosen',
+                            payload: { wordLength: word.length, secretWord: word, drawerName }
+                        });
+                    };
+                    content.appendChild(btn);
+                });
+            } else {
+                document.getElementById('role-status').innerText = "Guessing";
+                document.getElementById('toolbar').style.display = 'none';
+                modal.style.display = 'flex';
+                title.innerText = `${drawerName} is picking a word...`;
+                desc.innerText = "Get ready to guess!";
+                content.innerHTML = "";
+            }
+        };
+
+        window.handleWordChosen = ({ wordLength, secretWord, drawerName }) => {
+            document.getElementById('game-modal').style.display = 'none';
+            currentSecretWord = secretWord;
+
+            if (!isDrawer) {
+                document.getElementById('word-display').innerText = "_ ".repeat(wordLength).trim();
+            }
+            appendSystemMessage(`${drawerName} is now drawing!`);
+        };
 
         function startStroke(clientX, clientY) {
             if (!isDrawer) return;
@@ -400,7 +509,7 @@
 
             drawLine(prevX, prevY, currX, currY, currentColor);
 
-            if (window.channel && window.channelReady) {
+            if (window.channel) {
                 window.channel.send({
                     type: 'broadcast',
                     event: 'stroke',
@@ -410,10 +519,6 @@
 
             prevX = currX;
             prevY = currY;
-        }
-
-        function endStroke() {
-            isDrawing = false;
         }
 
         window.drawLine = (x0, y0, x1, y1, color) => {
@@ -429,65 +534,15 @@
         };
 
         window.rawClear = () => {
-            if (ctx && canvas) {
-                ctx.clearRect(0, 0, canvas.width, canvas.height);
-            }
+            if (ctx && canvas) ctx.clearRect(0, 0, canvas.width, canvas.height);
         };
 
         function clearCanvas() {
             window.rawClear();
-            if (window.channel && window.channelReady) {
+            if (window.channel) {
                 window.channel.send({ type: 'broadcast', event: 'clear' });
             }
         }
-
-        function startNewRound() {
-            isDrawer = true;
-            document.getElementById('toolbar').style.display = 'flex';
-            document.getElementById('role-status').innerText = "Pick Word";
-            window.rawClear();
-
-            const shuffled = [...WORD_POOL].sort(() => 0.5 - Math.random());
-            const choices = shuffled.slice(0, 3);
-
-            const modal = document.getElementById('choice-modal');
-            const container = document.getElementById('choices-container');
-            container.innerHTML = "";
-
-            choices.forEach(word => {
-                const btn = document.createElement('button');
-                btn.className = 'btn-choice';
-                btn.innerText = word;
-                btn.addEventListener('click', () => {
-                    modal.style.display = 'none';
-                    currentSecretWord = word;
-                    document.getElementById('word-display').innerText = word;
-                    document.getElementById('role-status').innerText = "Drawing";
-
-                    if (window.channel && window.channelReady) {
-                        window.channel.send({
-                            type: 'broadcast',
-                            event: 'new_round',
-                            payload: { wordLength: word.length, secretWord: word }
-                        });
-                        window.channel.send({ type: 'broadcast', event: 'clear' });
-                    }
-                });
-                container.appendChild(btn);
-            });
-
-            modal.style.display = 'flex';
-        }
-
-        window.onRemoteNewRound = (data) => {
-            isDrawer = false;
-            currentSecretWord = data.secretWord;
-            document.getElementById('toolbar').style.display = 'none';
-            document.getElementById('choice-modal').style.display = 'none';
-            document.getElementById('role-status').innerText = "Guessing";
-            document.getElementById('word-display').innerText = "_ ".repeat(data.wordLength).trim();
-            window.rawClear();
-        };
 
         function sendGuess() {
             const input = document.getElementById('chat-input');
@@ -497,14 +552,26 @@
             const isMatch = Boolean(currentSecretWord && (guess.toLowerCase() === currentSecretWord.toLowerCase()));
             const text = isMatch ? "GUESSED THE WORD! 🎉" : guess;
 
-            window.appendChat("You", text, isMatch);
+            window.appendChat(window.myName, text, isMatch);
 
-            if (window.channel && window.channelReady) {
+            if (window.channel) {
                 window.channel.send({
                     type: 'broadcast',
                     event: 'guess',
-                    payload: { sender: isDrawer ? "Drawer" : "Player", text, isCorrect: isMatch }
+                    payload: { sender: window.myName, text, isCorrect: isMatch }
                 });
+            }
+
+            // If guessed correctly, prepare next round
+            if (isMatch) {
+                setTimeout(() => {
+                    if (window.activePlayers && window.activePlayers.length >= 4) {
+                        const host = [...window.activePlayers].sort((a, b) => a.joinedAt - b.joinedAt)[0];
+                        if (host.id === window.myId) {
+                            triggerNextRound(window.activePlayers);
+                        }
+                    }
+                }, 3000);
             }
 
             input.value = "";
@@ -518,6 +585,15 @@
             feed.appendChild(row);
             feed.scrollTop = feed.scrollHeight;
         };
+
+        function appendSystemMessage(text) {
+            const feed = document.getElementById('chat-messages');
+            const row = document.createElement('div');
+            row.className = 'chat-system';
+            row.innerText = `[SYSTEM] ${text}`;
+            feed.appendChild(row);
+            feed.scrollTop = feed.scrollHeight;
+        }
     </script>
 </body>
 </html>
