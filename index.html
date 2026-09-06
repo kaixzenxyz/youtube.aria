@@ -17,74 +17,80 @@
         }
     </script>
 
-    <!-- Pusher JS Client with HTTP & SockJS Fallback Support -->
-    <script src="https://js.pusher.com/8.2.0/pusher.min.js"></script>
+    <!-- PieSocket Realtime WebSocket Client -->
+    <script src="https://unpkg.com/piesocket-js@5"></script>
     <script>
         const myPlayerId = 'p_' + Math.random().toString(36).substring(2, 9);
         const myName = 'Player ' + myPlayerId.substring(2, 6);
         window.myId = myPlayerId;
         window.myName = myName;
-
-        // Initialize Pusher with fallback transport protocols for Discord mobile sandbox
-        const pusher = new Pusher('5fd7c719f41d34fff220', {
-            cluster: 'ap2',
-            forceTLS: true,
-            enabledTransports: ['ws', 'xhr_streaming', 'xhr_polling', 'sockjs']
-        });
-
-        // Use client-event allowed channel
-        const channel = pusher.subscribe('cache-aria-skribbl-match');
-        window.channel = channel;
-        window.activePlayers = [];
-
-        // Receive Heartbeat / Ping from other players
-        channel.bind('client-ping', (data) => {
-            if (!data || !data.id) return;
-            registerPlayer(data.id, data.name, data.joinedAt);
-            // Respond back so the new player knows we exist
-            if (data.isNewJoin) {
-                channel.trigger('client-pong', {
-                    id: window.myId,
-                    name: window.myName,
-                    joinedAt: window.myJoinedAt
-                });
-            }
-        });
-
-        // Receive Pong back
-        channel.bind('client-pong', (data) => {
-            if (!data || !data.id) return;
-            registerPlayer(data.id, data.name, data.joinedAt);
-        });
-
-        // Receive Drawing Strokes
-        channel.bind('client-stroke', (data) => {
-            if (window.drawLine) {
-                window.drawLine(data.x0, data.y0, data.x1, data.y1, data.color);
-            }
-        });
-
-        // Receive Clear Canvas
-        channel.bind('client-clear', () => {
-            if (window.rawClear) window.rawClear();
-        });
-
-        // Receive Round Initialization
-        channel.bind('client-round-started', (data) => {
-            window.handleRoundStarted(data);
-        });
-
-        // Receive Word Picked
-        channel.bind('client-word-chosen', (data) => {
-            window.handleWordChosen(data);
-        });
-
-        // Receive Chat Guesses
-        channel.bind('client-guess', (data) => {
-            if (window.appendChat) window.appendChat(data.sender, data.text, data.isCorrect);
-        });
-
         window.myJoinedAt = Date.now();
+        window.activePlayers = [];
+        window.isSocketConnected = false;
+
+        // Initialize Free PieSocket Channel
+        const pieSocket = new PieSocket.default({
+            clusterId: 'free.blr2',
+            apiKey: 'VCWhZuQW8nmftRnHcfvd45eZoFxJnUpUDnhFVHGY',
+            notifySelf: false
+        });
+
+        const channel = pieSocket.subscribe('aria-skribbl-lobby-room');
+        window.pieChannel = channel;
+
+        channel.listen('open', () => {
+            window.isSocketConnected = true;
+            console.log('Connected to Realtime Room!');
+            
+            // Broadcast initial ping
+            broadcastData('ping', { id: window.myId, name: window.myName, joinedAt: window.myJoinedAt, isNewJoin: true });
+
+            // Periodic heartbeat
+            setInterval(() => {
+                broadcastData('ping', { id: window.myId, name: window.myName, joinedAt: window.myJoinedAt, isNewJoin: false });
+                
+                // Prune inactive users (> 8s silent)
+                const now = Date.now();
+                window.activePlayers = window.activePlayers.filter(p => (now - p.lastSeen) < 8000);
+                window.updateLobby();
+            }, 3000);
+        });
+
+        channel.listen('custom-message', (raw) => {
+            try {
+                const { type, payload } = typeof raw === 'string' ? JSON.parse(raw) : raw;
+                if (!type) return;
+
+                if (type === 'ping') {
+                    registerPlayer(payload.id, payload.name, payload.joinedAt);
+                    if (payload.isNewJoin) {
+                        broadcastData('pong', { id: window.myId, name: window.myName, joinedAt: window.myJoinedAt });
+                    }
+                } else if (type === 'pong') {
+                    registerPlayer(payload.id, payload.name, payload.joinedAt);
+                } else if (type === 'stroke') {
+                    if (window.drawLine) window.drawLine(payload.x0, payload.y0, payload.x1, payload.y1, payload.color);
+                } else if (type === 'clear') {
+                    if (window.rawClear) window.rawClear();
+                } else if (type === 'round_started') {
+                    window.handleRoundStarted(payload);
+                } else if (type === 'word_chosen') {
+                    window.handleWordChosen(payload);
+                } else if (type === 'guess') {
+                    if (window.appendChat) window.appendChat(payload.sender, payload.text, payload.isCorrect);
+                }
+            } catch(e) {
+                console.error("Payload error:", e);
+            }
+        });
+
+        function broadcastData(type, payload) {
+            if (window.pieChannel && window.isSocketConnected) {
+                window.pieChannel.publish('custom-message', JSON.stringify({ type, payload }));
+            }
+        }
+        window.broadcastData = broadcastData;
+
         registerPlayer(window.myId, window.myName, window.myJoinedAt);
 
         function registerPlayer(id, name, joinedAt) {
@@ -96,33 +102,6 @@
             }
             window.updateLobby();
         }
-
-        // Announce presence once connected
-        channel.bind('pusher:subscription_succeeded', () => {
-            window.channelReady = true;
-            channel.trigger('client-ping', {
-                id: window.myId,
-                name: window.myName,
-                joinedAt: window.myJoinedAt,
-                isNewJoin: true
-            });
-
-            // Keep presence updated every 4 seconds
-            setInterval(() => {
-                if (window.channelReady) {
-                    channel.trigger('client-ping', {
-                        id: window.myId,
-                        name: window.myName,
-                        joinedAt: window.myJoinedAt,
-                        isNewJoin: false
-                    });
-                }
-                // Prune players inactive for > 10 seconds
-                const now = Date.now();
-                window.activePlayers = window.activePlayers.filter(p => (now - p.lastSeen) < 10000);
-                window.updateLobby();
-            }, 4000);
-        });
     </script>
 
     <style>
@@ -439,7 +418,7 @@
                 document.getElementById('modal-desc').innerText = `Need 4 players to start (${count}/4 joined)`;
                 document.getElementById('modal-content').innerHTML = "";
             } else if (count >= 4 && !gameInProgress) {
-                // Oldest joined player acts as host to trigger the round
+                // Oldest joined player acts as the host coordinator
                 const host = [...window.activePlayers].sort((a, b) => a.joinedAt - b.joinedAt)[0];
                 if (host && host.id === window.myId) {
                     triggerNextRound(window.activePlayers);
@@ -454,13 +433,11 @@
 
             const choices = [...WORD_POOL].sort(() => 0.5 - Math.random()).slice(0, 3);
 
-            if (window.channel && window.channelReady) {
-                window.channel.trigger('client-round-started', {
-                    drawerId: drawer.id,
-                    drawerName: drawer.name,
-                    choices: choices
-                });
-            }
+            broadcastData('round_started', {
+                drawerId: drawer.id,
+                drawerName: drawer.name,
+                choices: choices
+            });
 
             window.handleRoundStarted({ drawerId: drawer.id, drawerName: drawer.name, choices });
         }
@@ -492,13 +469,11 @@
                         modal.style.display = 'none';
                         document.getElementById('word-display').innerText = word;
                         
-                        if (window.channel && window.channelReady) {
-                            window.channel.trigger('client-word-chosen', {
-                                wordLength: word.length,
-                                secretWord: word,
-                                drawerName: drawerName
-                            });
-                        }
+                        broadcastData('word_chosen', {
+                            wordLength: word.length,
+                            secretWord: word,
+                            drawerName: drawerName
+                        });
                     };
                     content.appendChild(btn);
                 });
@@ -538,11 +513,9 @@
 
             drawLine(prevX, prevY, currX, currY, currentColor);
 
-            if (window.channel && window.channelReady) {
-                window.channel.trigger('client-stroke', {
-                    x0: prevX, y0: prevY, x1: currX, y1: currY, color: currentColor
-                });
-            }
+            broadcastData('stroke', {
+                x0: prevX, y0: prevY, x1: currX, y1: currY, color: currentColor
+            });
 
             prevX = currX;
             prevY = currY;
@@ -566,9 +539,7 @@
 
         function clearCanvas() {
             window.rawClear();
-            if (window.channel && window.channelReady) {
-                window.channel.trigger('client-clear', {});
-            }
+            broadcastData('clear', {});
         }
 
         function sendGuess() {
@@ -581,13 +552,11 @@
 
             window.appendChat(window.myName, text, isMatch);
 
-            if (window.channel && window.channelReady) {
-                window.channel.trigger('client-guess', {
-                    sender: window.myName,
-                    text: text,
-                    isCorrect: isMatch
-                });
-            }
+            broadcastData('guess', {
+                sender: window.myName,
+                text: text,
+                isCorrect: isMatch
+            });
 
             if (isMatch) {
                 setTimeout(() => {
