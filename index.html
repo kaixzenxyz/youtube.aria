@@ -5,34 +5,35 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover">
     <title>Aria Skribbl</title>
 
-    <!-- Discord Embedded App SDK -->
     <script type="module">
         import { DiscordSDK } from 'https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@1.2.0/+esm';
         try {
             window.discordSdk = new DiscordSDK('1474456168045740284');
             await window.discordSdk.ready();
-            console.log("Discord SDK ready");
         } catch(e) {
-            console.warn("Running standalone:", e);
+            console.warn("Discord SDK offline or standalone:", e);
         }
     </script>
 
     <script>
         const myPlayerId = 'p_' + Math.random().toString(36).substring(2, 9);
-        const myName = 'Player ' + myPlayerId.substring(2, 6);
         window.myId = myPlayerId;
-        window.myName = myName;
         window.activePlayers = [];
         window.isDrawer = false;
         window.currentSecretWord = "";
 
-        // Determine protocol and establish proxy connection through Discord sandbox
-        const isSecure = window.location.protocol === 'https:';
+        // Check local storage or prompt for the user's server nickname once
+        let savedName = localStorage.getItem('aria_skribbl_display_name');
+        if (!savedName) {
+            savedName = prompt("Enter your Server Display Name / Nickname:", "Player") || ('Player_' + myPlayerId.substring(2, 6));
+            localStorage.setItem('aria_skribbl_display_name', savedName);
+        }
+        window.myName = savedName;
+
         let wsUrl;
         if (window.location.host.includes('discordsays.com')) {
             wsUrl = `wss://${window.location.host}/ws`;
         } else {
-            // Direct tunnel fallback for local/direct browser testing
             wsUrl = `wss://const-site-talented-press.trycloudflare.com`;
         }
 
@@ -40,20 +41,13 @@
         window.ws = socket;
 
         socket.onopen = () => {
-            console.log("Connected to Relay Server!");
             updateServerStatus("Connected 🟢");
-            // Join default room and announce identity
-            socket.send(JSON.stringify({ type: 'join', room: 'aria_voice_room', id: myPlayerId, name: myName }));
-            socket.send(JSON.stringify({ type: 'ping', id: myPlayerId, name: myName, joinedAt: Date.now() }));
+            socket.send(JSON.stringify({ type: 'join', room: 'aria_voice_room', id: myPlayerId, name: window.myName }));
+            socket.send(JSON.stringify({ type: 'ping', id: myPlayerId, name: window.myName, joinedAt: Date.now() }));
         };
 
-        socket.onclose = () => {
-            updateServerStatus("Disconnected 🔴");
-        };
-
-        socket.onerror = () => {
-            updateServerStatus("Error 🔴");
-        };
+        socket.onclose = () => updateServerStatus("Disconnected 🔴");
+        socket.onerror = () => updateServerStatus("Error 🔴");
 
         socket.onmessage = (event) => {
             try {
@@ -83,7 +77,7 @@
         };
 
         window.myJoinedAt = Date.now();
-        registerPlayer(myPlayerId, myName, window.myJoinedAt);
+        registerPlayer(myPlayerId, window.myName, window.myJoinedAt);
 
         function registerPlayer(id, name, joinedAt) {
             const existing = window.activePlayers.find(p => p.id === id);
@@ -93,6 +87,7 @@
                     window.appendSystemMessage(`${name} entered the room`);
                 }
             } else {
+                existing.name = name;
                 existing.lastSeen = Date.now();
             }
             window.updateLobby();
@@ -105,93 +100,28 @@
     </script>
 
     <style>
-        * { 
-            box-sizing: border-box; 
-            margin: 0; 
-            padding: 0; 
-            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; 
-            -webkit-tap-highlight-color: transparent; 
-        }
-
-        body { 
-            background: #111214; 
-            color: #fff; 
-            height: 100vh; 
-            display: flex; 
-            flex-direction: column; 
-            overflow: hidden; 
-            padding-top: max(56px, env(safe-area-inset-top));
-            padding-bottom: env(safe-area-inset-bottom);
-        }
-        
-        header { 
-            padding: 8px 12px; 
-            background: #232428; 
-            display: flex; 
-            justify-content: space-between; 
-            align-items: center; 
-            border-bottom: 2px solid #1e1f22; 
-            z-index: 10; 
-            min-height: 48px;
-        }
-
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
+        body { background: #111214; color: #fff; height: 100vh; display: flex; flex-direction: column; overflow: hidden; padding-top: max(56px, env(safe-area-inset-top)); padding-bottom: env(safe-area-inset-bottom); }
+        header { padding: 8px 12px; background: #232428; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e1f22; z-index: 10; min-height: 48px; }
         #role-status { font-size: 13px; font-weight: 600; color: #b5bac1; white-space: nowrap; }
         #word-display { font-size: 17px; font-weight: bold; letter-spacing: 4px; color: #f2f3f5; text-align: center; flex: 1; padding: 0 8px; }
         #player-badge { background: #313338; color: #57f287; padding: 6px 10px; border-radius: 6px; font-size: 11px; font-weight: bold; white-space: nowrap; }
-
-        #diagnostic-bar {
-            background: #1e1f22;
-            padding: 4px 12px;
-            font-size: 11px;
-            color: #949ba4;
-            display: flex;
-            justify-content: space-between;
-            align-items: center;
-            border-bottom: 1px solid #2b2d31;
-        }
-
+        #diagnostic-bar { background: #1e1f22; padding: 4px 12px; font-size: 11px; color: #949ba4; display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #2b2d31; }
         .main-container { flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; padding: 8px 10px 0 10px; }
-
-        #canvas-wrapper { 
-            flex: 1; 
-            background: #ffffff; 
-            position: relative; 
-            border-radius: 10px; 
-            overflow: hidden; 
-            box-shadow: 0 4px 12px rgba(0,0,0,0.3);
-            border: 2px solid #2b2d31;
-        }
-
+        #canvas-wrapper { flex: 1; background: #ffffff; position: relative; border-radius: 10px; overflow: hidden; box-shadow: 0 4px 12px rgba(0,0,0,0.3); border: 2px solid #2b2d31; }
         canvas { width: 100%; height: 100%; touch-action: none; cursor: crosshair; display: block; }
-
-        #game-modal { 
-            position: absolute; 
-            inset: 0; 
-            background: rgba(0,0,0,0.88); 
-            display: flex; 
-            flex-direction: column; 
-            align-items: center; 
-            justify-content: center; 
-            gap: 12px; 
-            z-index: 50; 
-            padding: 16px;
-            text-align: center;
-        }
-
+        #game-modal { position: absolute; inset: 0; background: rgba(0,0,0,0.88); display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 12px; z-index: 50; padding: 16px; text-align: center; }
         .btn-choice { padding: 12px 18px; font-size: 15px; font-weight: bold; background: #5865f2; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
         .btn-choice:active { background: #4752c4; }
-
         #toolbar { background: #2b2d31; padding: 6px 12px; display: none; gap: 10px; align-items: center; border-radius: 8px; margin-top: 6px; min-height: 44px; }
         .color-dot { width: 28px; height: 28px; border-radius: 50%; cursor: pointer; border: 2px solid #ffffff; transition: transform 0.1s; }
         .color-dot.active { transform: scale(1.15); border-color: #5865f2; }
         .btn-clear { background: #da373c; color: #fff; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-left: auto; font-weight: 600; font-size: 12px; }
-
         #chat-section { height: 140px; background: #1e1f22; display: flex; flex-direction: column; border-radius: 8px 8px 0 0; margin-top: 6px; border: 1px solid #2b2d31; }
         #chat-messages { flex: 1; overflow-y: auto; padding: 6px 10px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
         .chat-msg { color: #dbdee1; word-break: break-word; }
         .chat-system { color: #f1c40f; font-weight: bold; font-size: 11px; }
         .chat-correct { color: #57f287; font-weight: bold; background: rgba(87, 242, 135, 0.1); padding: 3px 6px; border-radius: 4px; }
-        
         #chat-input-row { display: flex; padding: 6px 8px; background: #2b2d31; gap: 8px; }
         #chat-input { flex: 1; padding: 8px 12px; border-radius: 6px; border: 1px solid #383a40; background: #1e1f22; color: #fff; outline: none; font-size: 14px; }
         #chat-btn { background: #5865f2; color: #fff; border: none; padding: 0 16px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; }
@@ -267,7 +197,6 @@
             resizeCanvas();
             window.addEventListener('resize', resizeCanvas);
 
-            // Pointer input handlers
             canvas.addEventListener('mousedown', (e) => startStroke(e.clientX, e.clientY));
             canvas.addEventListener('mousemove', (e) => moveStroke(e.clientX, e.clientY));
             window.addEventListener('mouseup', () => isDrawing = false);
@@ -304,7 +233,7 @@
         window.updateLobby = () => {
             const count = window.activePlayers.length;
             const rosterEl = document.getElementById('roster-display');
-            if (rosterEl) rosterEl.innerText = window.activePlayers.map(p => p.name).join(', ') || 'Only you';
+            if (rosterEl) rosterEl.innerText = window.activePlayers.map(p => p.name).join(', ') || window.myName;
 
             if (count < 4 && !gameInProgress) {
                 document.getElementById('game-modal').style.display = 'flex';
@@ -323,7 +252,6 @@
             gameInProgress = true;
             const chosenIndex = Math.floor(Math.random() * players.length);
             const drawer = players[chosenIndex];
-
             const choices = [...WORD_POOL].sort(() => 0.5 - Math.random()).slice(0, 3);
 
             if (window.ws && window.ws.readyState === 1) {
