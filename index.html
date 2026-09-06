@@ -2,7 +2,7 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
     <title>Aria Skribbl</title>
 
     <!-- Discord Embedded App SDK -->
@@ -11,8 +11,9 @@
         try {
             window.discordSdk = new DiscordSDK('1474456168045740284');
             await window.discordSdk.ready();
+            console.log("Discord SDK Handshake completed");
         } catch(e) {
-            console.log("Running outside Discord client environment");
+            console.warn("Running outside Discord client environment:", e);
         }
     </script>
 
@@ -24,8 +25,6 @@
         const SUPABASE_KEY = 'sb_publishable_1_OPff-uwu9rWTTNd3pR2g_yNqcy_T6';
 
         const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-        // Connect to a broadcast room for the voice channel
         const channel = supabase.channel('aria-skribbl-room', {
             config: { broadcast: { self: false } }
         });
@@ -34,55 +33,64 @@
 
         // Listen for canvas drawing strokes from others
         channel.on('broadcast', { event: 'stroke' }, ({ payload }) => {
-            window.drawLine(payload.x0, payload.y0, payload.x1, payload.y1, payload.color);
+            if (window.drawLine) {
+                window.drawLine(payload.x0, payload.y0, payload.x1, payload.y1, payload.color);
+            }
         });
 
         // Listen for canvas clear events
         channel.on('broadcast', { event: 'clear' }, () => {
-            window.rawClear();
+            if (window.rawClear) window.rawClear();
         });
 
         // Listen for round starts and word choices
         channel.on('broadcast', { event: 'new_round' }, ({ payload }) => {
-            window.onRemoteNewRound(payload);
+            if (window.onRemoteNewRound) window.onRemoteNewRound(payload);
         });
 
         // Listen for chat guesses
         channel.on('broadcast', { event: 'guess' }, ({ payload }) => {
-            window.appendChat(payload.sender, payload.text, payload.isCorrect);
+            if (window.appendChat) window.appendChat(payload.sender, payload.text, payload.isCorrect);
         });
 
         channel.subscribe((status) => {
-            if (status === 'SUBSCRIBED') {
-                console.log('Connected to Supabase Realtime Broadcast!');
-            }
+            console.log('Supabase Channel Status:', status);
         });
     </script>
 
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; -webkit-tap-highlight-color: transparent; }
         body { background: #18191c; color: #fff; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-        header { padding: 10px 16px; background: #2b2d31; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e1f22; z-index: 10; }
-        #word-display { font-size: 20px; font-weight: bold; letter-spacing: 4px; }
-        .main-container { flex: 1; display: flex; flex-direction: column; position: relative; }
-        #canvas-wrapper { flex: 1; background: #fff; position: relative; }
-        canvas { width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
         
-        #choice-modal { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 20; }
-        .btn-choice { padding: 12px 24px; font-size: 18px; font-weight: bold; background: #5865f2; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
-        .btn-choice:hover { background: #4752c4; }
+        header { padding: 10px 14px; background: #2b2d31; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e1f22; z-index: 10; height: 52px; }
+        #role-status { font-size: 14px; font-weight: 600; color: #b5bac1; }
+        #word-display { font-size: 18px; font-weight: bold; letter-spacing: 4px; color: #f2f3f5; }
+        #start-round-btn { background: #57f287; color: #000; padding: 8px 14px; border: none; border-radius: 6px; font-weight: bold; cursor: pointer; font-size: 13px; }
+        #start-round-btn:active { transform: scale(0.96); }
 
-        #toolbar { background: #2b2d31; padding: 8px 12px; display: none; gap: 10px; align-items: center; border-top: 1px solid #1e1f22; }
-        .color-dot { width: 26px; height: 26px; border-radius: 50%; cursor: pointer; border: 2px solid #fff; }
-        .btn-clear { background: #ed4245; color: #fff; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-left: auto; }
+        .main-container { flex: 1; display: flex; flex-direction: column; position: relative; overflow: hidden; }
+        #canvas-wrapper { flex: 1; background: #ffffff; position: relative; overflow: hidden; }
+        canvas { width: 100%; height: 100%; touch-action: none; cursor: crosshair; display: block; }
+        
+        #choice-modal { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 50; }
+        .btn-choice { padding: 12px 20px; font-size: 16px; font-weight: bold; background: #5865f2; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+        .btn-choice:active { background: #4752c4; }
 
-        #chat-section { height: 160px; background: #1e1f22; display: flex; flex-direction: column; }
-        #chat-messages { flex: 1; overflow-y: auto; padding: 8px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
-        .chat-msg { color: #dbdee1; }
-        .chat-correct { color: #57f287; font-weight: bold; }
-        #chat-input-row { display: flex; padding: 8px; background: #2b2d31; gap: 8px; }
-        #chat-input { flex: 1; padding: 8px 12px; border-radius: 4px; border: 1px solid #383a40; background: #1e1f22; color: #fff; outline: none; }
-        #chat-btn { background: #5865f2; color: #fff; border: none; padding: 0 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+        #toolbar { background: #2b2d31; padding: 8px 12px; display: none; gap: 12px; align-items: center; border-top: 1px solid #1e1f22; height: 48px; }
+        .color-dot { width: 28px; height: 28px; border-radius: 50%; cursor: pointer; border: 2px solid #ffffff; transition: transform 0.1s; }
+        .color-dot.active { transform: scale(1.15); border-color: #5865f2; }
+        .btn-clear { background: #ed4245; color: #fff; border: none; padding: 6px 14px; border-radius: 6px; cursor: pointer; margin-left: auto; font-weight: 600; font-size: 12px; }
+        .btn-clear:active { transform: scale(0.95); }
+
+        #chat-section { height: 180px; background: #1e1f22; display: flex; flex-direction: column; border-top: 2px solid #2b2d31; }
+        #chat-messages { flex: 1; overflow-y: auto; padding: 8px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 6px; }
+        .chat-msg { color: #dbdee1; word-break: break-word; }
+        .chat-correct { color: #57f287; font-weight: bold; background: rgba(87, 242, 135, 0.1); padding: 4px 8px; border-radius: 4px; }
+        
+        #chat-input-row { display: flex; padding: 8px 10px; background: #2b2d31; gap: 8px; }
+        #chat-input { flex: 1; padding: 10px 12px; border-radius: 6px; border: 1px solid #383a40; background: #1e1f22; color: #fff; outline: none; font-size: 14px; }
+        #chat-btn { background: #5865f2; color: #fff; border: none; padding: 0 16px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 14px; }
+        #chat-btn:active { background: #4752c4; }
     </style>
 </head>
 <body>
@@ -90,7 +98,7 @@
     <header>
         <div id="role-status">Spectating</div>
         <div id="word-display">_ _ _ _</div>
-        <button id="start-round-btn" onclick="startNewRound()" style="background:#57f287; color:#000; padding:6px 12px; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">I Wanna Draw!</button>
+        <button id="start-round-btn">I Wanna Draw!</button>
     </header>
 
     <div class="main-container">
@@ -98,25 +106,25 @@
             <canvas id="paintCanvas"></canvas>
             
             <div id="choice-modal">
-                <h2 style="margin-bottom: 8px;">Pick a Secret Word:</h2>
-                <div id="choices-container" style="display: flex; gap: 12px;"></div>
+                <h3 style="margin-bottom: 4px; color:#fff;">Pick a Secret Word</h3>
+                <div id="choices-container" style="display: flex; gap: 10px; flex-wrap: wrap; justify-content: center;"></div>
             </div>
         </div>
 
         <div id="toolbar">
-            <div class="color-dot" style="background:#000000;" onclick="setColor('#000000')"></div>
-            <div class="color-dot" style="background:#ed4245;" onclick="setColor('#ed4245')"></div>
-            <div class="color-dot" style="background:#5865f2;" onclick="setColor('#5865f2')"></div>
-            <div class="color-dot" style="background:#57f287;" onclick="setColor('#57f287')"></div>
-            <div class="color-dot" style="background:#fee75c;" onclick="setColor('#fee75c')"></div>
-            <button class="btn-clear" onclick="clearCanvas()">Clear</button>
+            <div class="color-dot active" style="background:#000000;" data-color="#000000"></div>
+            <div class="color-dot" style="background:#ed4245;" data-color="#ed4245"></div>
+            <div class="color-dot" style="background:#5865f2;" data-color="#5865f2"></div>
+            <div class="color-dot" style="background:#57f287;" data-color="#57f287"></div>
+            <div class="color-dot" style="background:#fee75c;" data-color="#fee75c"></div>
+            <button class="btn-clear" id="clear-btn">Clear</button>
         </div>
 
         <div id="chat-section">
             <div id="chat-messages"></div>
             <div id="chat-input-row">
-                <input type="text" id="chat-input" placeholder="Type your guess..." onkeydown="if(event.key==='Enter') sendGuess()">
-                <button id="chat-btn" onclick="sendGuess()">Guess</button>
+                <input type="text" id="chat-input" placeholder="Type your guess here..." autocomplete="off">
+                <button id="chat-btn">Guess</button>
             </div>
         </div>
     </div>
@@ -125,7 +133,8 @@
         const WORD_POOL = [
             "Apple", "Car", "House", "Tree", "Airplane", "Guitar", "Pizza", "Cat", "Dog",
             "Elephant", "Bicycle", "Sun", "Moon", "Sword", "Computer", "Clock", "Helicopter",
-            "Spider", "Rocket", "Chair", "Door", "Ice Cream", "Camera", "Fish", "Pencil"
+            "Spider", "Rocket", "Chair", "Door", "Ice Cream", "Camera", "Fish", "Pencil",
+            "Burger", "Train", "Star", "Boat", "Shoes"
         ];
 
         let canvas, ctx;
@@ -135,53 +144,80 @@
         let currentSecretWord = "";
         let prevX = 0, prevY = 0;
 
-        window.onload = () => {
+        function resizeCanvas() {
+            if (!canvas) return;
+            const rect = canvas.getBoundingClientRect();
+            // Store previous drawing
+            const temp = ctx.getImageData(0, 0, canvas.width, canvas.height);
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+            ctx.putImageData(temp, 0, 0);
+        }
+
+        window.addEventListener('DOMContentLoaded', () => {
             canvas = document.getElementById('paintCanvas');
             ctx = canvas.getContext('2d');
-            resizeCanvas();
-            window.addEventListener('resize', resizeCanvas);
 
-            // Pointer & Touch Drawing Listeners
-            canvas.addEventListener('mousedown', startStroke);
-            canvas.addEventListener('mousemove', moveStroke);
-            canvas.addEventListener('mouseup', () => isDrawing = false);
-            canvas.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                const t = e.touches[0];
-                startStroke({ clientX: t.clientX, clientY: t.clientY });
-            });
-            canvas.addEventListener('touchmove', (e) => {
-                e.preventDefault();
-                const t = e.touches[0];
-                moveStroke({ clientX: t.clientX, clientY: t.clientY });
-            });
-            canvas.addEventListener('touchend', () => isDrawing = false);
-        };
-
-        function resizeCanvas() {
             const rect = canvas.getBoundingClientRect();
             canvas.width = rect.width;
             canvas.height = rect.height;
-        }
 
-        function startStroke(e) {
+            window.addEventListener('resize', resizeCanvas);
+
+            // Desktop Mouse Listeners
+            canvas.addEventListener('mousedown', (e) => startStroke(e.clientX, e.clientY));
+            canvas.addEventListener('mousemove', (e) => moveStroke(e.clientX, e.clientY));
+            window.addEventListener('mouseup', endStroke);
+
+            // Mobile Touch Listeners
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const t = e.touches[0];
+                startStroke(t.clientX, t.clientY);
+            }, { passive: false });
+
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                const t = e.touches[0];
+                moveStroke(t.clientX, t.clientY);
+            }, { passive: false });
+
+            window.addEventListener('touchend', endStroke);
+
+            // Explicit Button Listeners
+            document.getElementById('start-round-btn').addEventListener('click', startNewRound);
+            document.getElementById('clear-btn').addEventListener('click', clearCanvas);
+            document.getElementById('chat-btn').addEventListener('click', sendGuess);
+            document.getElementById('chat-input').addEventListener('keydown', (e) => {
+                if (e.key === 'Enter') sendGuess();
+            });
+
+            // Color Selector Buttons
+            document.querySelectorAll('.color-dot').forEach(dot => {
+                dot.addEventListener('click', () => {
+                    document.querySelectorAll('.color-dot').forEach(d => d.classList.remove('active'));
+                    dot.classList.add('active');
+                    currentColor = dot.getAttribute('data-color');
+                });
+            });
+        });
+
+        function startStroke(clientX, clientY) {
             if (!isDrawer) return;
             isDrawing = true;
             const rect = canvas.getBoundingClientRect();
-            prevX = (e.clientX - rect.left) / canvas.width;
-            prevY = (e.clientY - rect.top) / canvas.height;
+            prevX = (clientX - rect.left) / canvas.width;
+            prevY = (clientY - rect.top) / canvas.height;
         }
 
-        function moveStroke(e) {
+        function moveStroke(clientX, clientY) {
             if (!isDrawing || !isDrawer) return;
             const rect = canvas.getBoundingClientRect();
-            const currX = (e.clientX - rect.left) / canvas.width;
-            const currY = (e.clientY - rect.top) / canvas.height;
+            const currX = (clientX - rect.left) / canvas.width;
+            const currY = (clientY - rect.top) / canvas.height;
 
-            // Draw locally
             drawLine(prevX, prevY, currX, currY, currentColor);
 
-            // Broadcast normalized stroke coordinates (0.0 to 1.0)
             if (window.channel) {
                 window.channel.send({
                     type: 'broadcast',
@@ -194,329 +230,40 @@
             prevY = currY;
         }
 
+        function endStroke() {
+            isDrawing = false;
+        }
+
         window.drawLine = (x0, y0, x1, y1, color) => {
+            if (!ctx || !canvas) return;
             ctx.beginPath();
             ctx.moveTo(x0 * canvas.width, y0 * canvas.height);
             ctx.lineTo(x1 * canvas.width, y1 * canvas.height);
             ctx.strokeStyle = color;
             ctx.lineWidth = 3;
             ctx.lineCap = "round";
+            ctx.lineJoin = "round";
             ctx.stroke();
         };
 
-        window.setColor = (c) => currentColor = c;
-
-        window.rawClear = () => ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        window.clearCanvas = () => {
-            rawClear();
-            if (window.channel) {
-                window.channel.send({ type: 'broadcast', event: 'clear' });
+        window.rawClear = () => {
+            if (ctx && canvas) {
+                ctx.clearRect(0, 0, canvas.width, canvas.height);
             }
         };
 
-        window.startNewRound = () => {
-            isDrawer = true;
-            document.getElementById('toolbar').style.display = 'flex';
-            document.getElementById('role-status').innerText = "Pick a Word!";
-            rawClear();
-
-            const shuffled = [...WORD_POOL].sort(() => 0.5 - Math.random());
-            const choices = shuffled.slice(0, 3);
-
-            const modal = document.getElementById('choice-modal');
-            const container = document.getElementById('choices-container');
-            container.innerHTML = "";
-
-            choices.forEach(w => {
-                const btn = document.createElement('button');
-                btn.className = 'btn-choice';
-                btn.innerText = w;
-                btn.onclick = () => {
-                    modal.style.display = 'none';
-                    currentSecretWord = w;
-                    document.getElementById('word-display').innerText = w;
-                    document.getElementById('role-status').innerText = "You are Drawing!";
-
-                    if (window.channel) {
-                        window.channel.send({
-                            type: 'broadcast',
-                            event: 'new_round',
-                            payload: { wordLength: w.length, secretWord: w }
-                        });
-                        window.channel.send({ type: 'broadcast', event: 'clear' });
-                    }
-                };
-                container.appendChild(btn);
-            });
-
-            modal.style.display = 'flex';
-        };
-
-        window.onRemoteNewRound = (data) => {
-            isDrawer = false;
-            currentSecretWord = data.secretWord;
-            document.getElementById('toolbar').style.display = 'none';
-            document.getElementById('choice-modal').style.display = 'none';
-            document.getElementById('role-status').innerText = "Guess the Word!";
-            document.getElementById('word-display').innerText = "_ ".repeat(data.wordLength).trim();
-            rawClear();
-        };
-
-        window.sendGuess = () => {
-            const input = document.getElementById('chat-input');
-            const guess = input.value.trim();
-            if (!guess) return;
-
-            const isMatch = currentSecretWord && (guess.toLowerCase() === currentSecretWord.toLowerCase());
-            const text = isMatch ? "GUESSED THE WORD! 🎉" : guess;
-
-            appendChat(isDrawer ? "Drawer" : "You", text, isMatch);
-
-            if (window.channel) {
-                window.channel.send({
-                    type: 'broadcast',
-                    event: 'guess',
-                    payload: { sender: "Player", text, isCorrect: isMatch }
-                });
-            }
-
-            input.value = "";
-        };
-
-        window.appendChat = (sender, text, isCorrect) => {
-            const feed = document.getElementById('chat-messages');
-            const row = document.createElement('div');
-            row.className = isCorrect ? 'chat-correct' : 'chat-msg';
-            row.innerText = `${sender}: ${text}`;
-            feed.appendChild(row);
-            feed.scrollTop = feed.scrollHeight;
-        };
-    </script>
-</body>
-</html>
-<!DOCTYPE html>
-<html lang="en">
-<head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
-    <title>Aria Skribbl</title>
-
-    <!-- Discord Embedded App SDK -->
-    <script type="module">
-        import { DiscordSDK } from 'https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@1.2.0/+esm';
-        try {
-            window.discordSdk = new DiscordSDK('YOUR_DISCORD_CLIENT_ID');
-            await window.discordSdk.ready();
-        } catch(e) {
-            console.log("Running outside Discord client environment");
-        }
-    </script>
-
-    <!-- Supabase JS Client via CDN -->
-    <script type="module">
-        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
-
-        const SUPABASE_URL = 'https://hvnquoqpadrtuyzbosmd.supabase.co';
-        const SUPABASE_KEY = 'sb_publishable_1_OPff-uwu9rWTTNd3pR2g_yNqcy_T6';
-
-        const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
-
-        // Connect to a broadcast room for the voice channel
-        const channel = supabase.channel('aria-skribbl-room', {
-            config: { broadcast: { self: false } }
-        });
-
-        window.channel = channel;
-
-        // Listen for canvas drawing strokes from others
-        channel.on('broadcast', { event: 'stroke' }, ({ payload }) => {
-            window.drawLine(payload.x0, payload.y0, payload.x1, payload.y1, payload.color);
-        });
-
-        // Listen for canvas clear events
-        channel.on('broadcast', { event: 'clear' }, () => {
+        function clearCanvas() {
             window.rawClear();
-        });
-
-        // Listen for round starts and word choices
-        channel.on('broadcast', { event: 'new_round' }, ({ payload }) => {
-            window.onRemoteNewRound(payload);
-        });
-
-        // Listen for chat guesses
-        channel.on('broadcast', { event: 'guess' }, ({ payload }) => {
-            window.appendChat(payload.sender, payload.text, payload.isCorrect);
-        });
-
-        channel.subscribe((status) => {
-            if (status === 'SUBSCRIBED') {
-                console.log('Connected to Supabase Realtime Broadcast!');
-            }
-        });
-    </script>
-
-    <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
-        body { background: #18191c; color: #fff; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
-        header { padding: 10px 16px; background: #2b2d31; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e1f22; z-index: 10; }
-        #word-display { font-size: 20px; font-weight: bold; letter-spacing: 4px; }
-        .main-container { flex: 1; display: flex; flex-direction: column; position: relative; }
-        #canvas-wrapper { flex: 1; background: #fff; position: relative; }
-        canvas { width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
-        
-        #choice-modal { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 20; }
-        .btn-choice { padding: 12px 24px; font-size: 18px; font-weight: bold; background: #5865f2; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
-        .btn-choice:hover { background: #4752c4; }
-
-        #toolbar { background: #2b2d31; padding: 8px 12px; display: none; gap: 10px; align-items: center; border-top: 1px solid #1e1f22; }
-        .color-dot { width: 26px; height: 26px; border-radius: 50%; cursor: pointer; border: 2px solid #fff; }
-        .btn-clear { background: #ed4245; color: #fff; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-left: auto; }
-
-        #chat-section { height: 160px; background: #1e1f22; display: flex; flex-direction: column; }
-        #chat-messages { flex: 1; overflow-y: auto; padding: 8px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
-        .chat-msg { color: #dbdee1; }
-        .chat-correct { color: #57f287; font-weight: bold; }
-        #chat-input-row { display: flex; padding: 8px; background: #2b2d31; gap: 8px; }
-        #chat-input { flex: 1; padding: 8px 12px; border-radius: 4px; border: 1px solid #383a40; background: #1e1f22; color: #fff; outline: none; }
-        #chat-btn { background: #5865f2; color: #fff; border: none; padding: 0 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
-    </style>
-</head>
-<body>
-
-    <header>
-        <div id="role-status">Spectating</div>
-        <div id="word-display">_ _ _ _</div>
-        <button id="start-round-btn" onclick="startNewRound()" style="background:#57f287; color:#000; padding:6px 12px; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">I Wanna Draw!</button>
-    </header>
-
-    <div class="main-container">
-        <div id="canvas-wrapper">
-            <canvas id="paintCanvas"></canvas>
-            
-            <div id="choice-modal">
-                <h2 style="margin-bottom: 8px;">Pick a Secret Word:</h2>
-                <div id="choices-container" style="display: flex; gap: 12px;"></div>
-            </div>
-        </div>
-
-        <div id="toolbar">
-            <div class="color-dot" style="background:#000000;" onclick="setColor('#000000')"></div>
-            <div class="color-dot" style="background:#ed4245;" onclick="setColor('#ed4245')"></div>
-            <div class="color-dot" style="background:#5865f2;" onclick="setColor('#5865f2')"></div>
-            <div class="color-dot" style="background:#57f287;" onclick="setColor('#57f287')"></div>
-            <div class="color-dot" style="background:#fee75c;" onclick="setColor('#fee75c')"></div>
-            <button class="btn-clear" onclick="clearCanvas()">Clear</button>
-        </div>
-
-        <div id="chat-section">
-            <div id="chat-messages"></div>
-            <div id="chat-input-row">
-                <input type="text" id="chat-input" placeholder="Type your guess..." onkeydown="if(event.key==='Enter') sendGuess()">
-                <button id="chat-btn" onclick="sendGuess()">Guess</button>
-            </div>
-        </div>
-    </div>
-
-    <script>
-        const WORD_POOL = [
-            "Apple", "Car", "House", "Tree", "Airplane", "Guitar", "Pizza", "Cat", "Dog",
-            "Elephant", "Bicycle", "Sun", "Moon", "Sword", "Computer", "Clock", "Helicopter",
-            "Spider", "Rocket", "Chair", "Door", "Ice Cream", "Camera", "Fish", "Pencil"
-        ];
-
-        let canvas, ctx;
-        let isDrawing = false;
-        let currentColor = "#000000";
-        let isDrawer = false;
-        let currentSecretWord = "";
-        let prevX = 0, prevY = 0;
-
-        window.onload = () => {
-            canvas = document.getElementById('paintCanvas');
-            ctx = canvas.getContext('2d');
-            resizeCanvas();
-            window.addEventListener('resize', resizeCanvas);
-
-            // Pointer & Touch Drawing Listeners
-            canvas.addEventListener('mousedown', startStroke);
-            canvas.addEventListener('mousemove', moveStroke);
-            canvas.addEventListener('mouseup', () => isDrawing = false);
-            canvas.addEventListener('touchstart', (e) => {
-                e.preventDefault();
-                const t = e.touches[0];
-                startStroke({ clientX: t.clientX, clientY: t.clientY });
-            });
-            canvas.addEventListener('touchmove', (e) => {
-                e.preventDefault();
-                const t = e.touches[0];
-                moveStroke({ clientX: t.clientX, clientY: t.clientY });
-            });
-            canvas.addEventListener('touchend', () => isDrawing = false);
-        };
-
-        function resizeCanvas() {
-            const rect = canvas.getBoundingClientRect();
-            canvas.width = rect.width;
-            canvas.height = rect.height;
-        }
-
-        function startStroke(e) {
-            if (!isDrawer) return;
-            isDrawing = true;
-            const rect = canvas.getBoundingClientRect();
-            prevX = (e.clientX - rect.left) / canvas.width;
-            prevY = (e.clientY - rect.top) / canvas.height;
-        }
-
-        function moveStroke(e) {
-            if (!isDrawing || !isDrawer) return;
-            const rect = canvas.getBoundingClientRect();
-            const currX = (e.clientX - rect.left) / canvas.width;
-            const currY = (e.clientY - rect.top) / canvas.height;
-
-            // Draw locally
-            drawLine(prevX, prevY, currX, currY, currentColor);
-
-            // Broadcast normalized stroke coordinates (0.0 to 1.0)
-            if (window.channel) {
-                window.channel.send({
-                    type: 'broadcast',
-                    event: 'stroke',
-                    payload: { x0: prevX, y0: prevY, x1: currX, y1: currY, color: currentColor }
-                });
-            }
-
-            prevX = currX;
-            prevY = currY;
-        }
-
-        window.drawLine = (x0, y0, x1, y1, color) => {
-            ctx.beginPath();
-            ctx.moveTo(x0 * canvas.width, y0 * canvas.height);
-            ctx.lineTo(x1 * canvas.width, y1 * canvas.height);
-            ctx.strokeStyle = color;
-            ctx.lineWidth = 3;
-            ctx.lineCap = "round";
-            ctx.stroke();
-        };
-
-        window.setColor = (c) => currentColor = c;
-
-        window.rawClear = () => ctx.clearRect(0, 0, canvas.width, canvas.height);
-
-        window.clearCanvas = () => {
-            rawClear();
             if (window.channel) {
                 window.channel.send({ type: 'broadcast', event: 'clear' });
             }
-        };
+        }
 
-        window.startNewRound = () => {
+        function startNewRound() {
             isDrawer = true;
             document.getElementById('toolbar').style.display = 'flex';
-            document.getElementById('role-status').innerText = "Pick a Word!";
-            rawClear();
+            document.getElementById('role-status').innerText = "Picking a Word...";
+            window.rawClear();
 
             const shuffled = [...WORD_POOL].sort(() => 0.5 - Math.random());
             const choices = shuffled.slice(0, 3);
@@ -525,30 +272,30 @@
             const container = document.getElementById('choices-container');
             container.innerHTML = "";
 
-            choices.forEach(w => {
+            choices.forEach(word => {
                 const btn = document.createElement('button');
                 btn.className = 'btn-choice';
-                btn.innerText = w;
-                btn.onclick = () => {
+                btn.innerText = word;
+                btn.addEventListener('click', () => {
                     modal.style.display = 'none';
-                    currentSecretWord = w;
-                    document.getElementById('word-display').innerText = w;
+                    currentSecretWord = word;
+                    document.getElementById('word-display').innerText = word;
                     document.getElementById('role-status').innerText = "You are Drawing!";
 
                     if (window.channel) {
                         window.channel.send({
                             type: 'broadcast',
                             event: 'new_round',
-                            payload: { wordLength: w.length, secretWord: w }
+                            payload: { wordLength: word.length, secretWord: word }
                         });
                         window.channel.send({ type: 'broadcast', event: 'clear' });
                     }
-                };
+                });
                 container.appendChild(btn);
             });
 
             modal.style.display = 'flex';
-        };
+        }
 
         window.onRemoteNewRound = (data) => {
             isDrawer = false;
@@ -557,18 +304,18 @@
             document.getElementById('choice-modal').style.display = 'none';
             document.getElementById('role-status').innerText = "Guess the Word!";
             document.getElementById('word-display').innerText = "_ ".repeat(data.wordLength).trim();
-            rawClear();
+            window.rawClear();
         };
 
-        window.sendGuess = () => {
+        function sendGuess() {
             const input = document.getElementById('chat-input');
             const guess = input.value.trim();
             if (!guess) return;
 
-            const isMatch = currentSecretWord && (guess.toLowerCase() === currentSecretWord.toLowerCase());
+            const isMatch = Boolean(currentSecretWord && (guess.toLowerCase() === currentSecretWord.toLowerCase()));
             const text = isMatch ? "GUESSED THE WORD! 🎉" : guess;
 
-            appendChat(isDrawer ? "Drawer" : "You", text, isMatch);
+            window.appendChat(isDrawer ? "Drawer" : "You", text, isMatch);
 
             if (window.channel) {
                 window.channel.send({
@@ -579,7 +326,7 @@
             }
 
             input.value = "";
-        };
+        }
 
         window.appendChat = (sender, text, isCorrect) => {
             const feed = document.getElementById('chat-messages');
