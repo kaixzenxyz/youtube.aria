@@ -2,92 +2,593 @@
 <html lang="en">
 <head>
     <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Aria YouTube</title>
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Aria Skribbl</title>
+
+    <!-- Discord Embedded App SDK -->
     <script type="module">
         import { DiscordSDK } from 'https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@1.2.0/+esm';
-        // Replace with Aria's Application ID
-        const discordSdk = new DiscordSDK('1474456168045740284');
-        await discordSdk.ready();
+        try {
+            window.discordSdk = new DiscordSDK('1474456168045740284');
+            await window.discordSdk.ready();
+        } catch(e) {
+            console.log("Running outside Discord client environment");
+        }
     </script>
+
+    <!-- Supabase JS Client via CDN -->
+    <script type="module">
+        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+        const SUPABASE_URL = 'https://hvnquoqpadrtuyzbosmd.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_1_OPff-uwu9rWTTNd3pR2g_yNqcy_T6';
+
+        const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // Connect to a broadcast room for the voice channel
+        const channel = supabase.channel('aria-skribbl-room', {
+            config: { broadcast: { self: false } }
+        });
+
+        window.channel = channel;
+
+        // Listen for canvas drawing strokes from others
+        channel.on('broadcast', { event: 'stroke' }, ({ payload }) => {
+            window.drawLine(payload.x0, payload.y0, payload.x1, payload.y1, payload.color);
+        });
+
+        // Listen for canvas clear events
+        channel.on('broadcast', { event: 'clear' }, () => {
+            window.rawClear();
+        });
+
+        // Listen for round starts and word choices
+        channel.on('broadcast', { event: 'new_round' }, ({ payload }) => {
+            window.onRemoteNewRound(payload);
+        });
+
+        // Listen for chat guesses
+        channel.on('broadcast', { event: 'guess' }, ({ payload }) => {
+            window.appendChat(payload.sender, payload.text, payload.isCorrect);
+        });
+
+        channel.subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+                console.log('Connected to Supabase Realtime Broadcast!');
+            }
+        });
+    </script>
+
     <style>
-        * { box-sizing: border-box; margin: 0; padding: 0; }
-        body { background: #0f0f0f; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; display: flex; flex-direction: column; height: 100vh; overflow: hidden; }
-        header { padding: 10px 14px; background: #202020; display: flex; gap: 8px; position: sticky; top: 0; z-index: 10; }
-        input { flex: 1; padding: 10px 14px; border-radius: 20px; border: 1px solid #333; background: #121212; color: #fff; outline: none; font-size: 14px; }
-        button { padding: 8px 18px; border-radius: 20px; border: none; background: #cc0000; color: #fff; font-weight: bold; cursor: pointer; }
-        #player-wrapper { width: 100%; aspect-ratio: 16/9; background: #000; display: none; }
-        iframe { width: 100%; height: 100%; border: none; }
-        #feed { flex: 1; overflow-y: auto; padding: 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 14px; }
-        .card { background: #181818; border-radius: 8px; overflow: hidden; cursor: pointer; position: relative; }
-        .card img { width: 100%; aspect-ratio: 16/9; object-fit: cover; display: block; }
-        .card-info { padding: 8px 10px; }
-        .card-title { font-size: 13px; font-weight: 600; line-height: 1.3; margin-bottom: 4px; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; overflow: hidden; }
-        .card-author { font-size: 12px; color: #aaa; }
-        .badge { position: absolute; top: 8px; left: 8px; background: #cc0000; color: #fff; font-size: 10px; font-weight: bold; padding: 2px 6px; border-radius: 4px; text-transform: uppercase; }
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #18191c; color: #fff; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        header { padding: 10px 16px; background: #2b2d31; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e1f22; z-index: 10; }
+        #word-display { font-size: 20px; font-weight: bold; letter-spacing: 4px; }
+        .main-container { flex: 1; display: flex; flex-direction: column; position: relative; }
+        #canvas-wrapper { flex: 1; background: #fff; position: relative; }
+        canvas { width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+        
+        #choice-modal { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 20; }
+        .btn-choice { padding: 12px 24px; font-size: 18px; font-weight: bold; background: #5865f2; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+        .btn-choice:hover { background: #4752c4; }
+
+        #toolbar { background: #2b2d31; padding: 8px 12px; display: none; gap: 10px; align-items: center; border-top: 1px solid #1e1f22; }
+        .color-dot { width: 26px; height: 26px; border-radius: 50%; cursor: pointer; border: 2px solid #fff; }
+        .btn-clear { background: #ed4245; color: #fff; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-left: auto; }
+
+        #chat-section { height: 160px; background: #1e1f22; display: flex; flex-direction: column; }
+        #chat-messages { flex: 1; overflow-y: auto; padding: 8px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+        .chat-msg { color: #dbdee1; }
+        .chat-correct { color: #57f287; font-weight: bold; }
+        #chat-input-row { display: flex; padding: 8px; background: #2b2d31; gap: 8px; }
+        #chat-input { flex: 1; padding: 8px 12px; border-radius: 4px; border: 1px solid #383a40; background: #1e1f22; color: #fff; outline: none; }
+        #chat-btn { background: #5865f2; color: #fff; border: none; padding: 0 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
     </style>
 </head>
 <body>
+
     <header>
-        <input type="text" id="query" placeholder="Search videos or live streams..." onkeydown="if(event.key==='Enter') searchVideos()">
-        <button onclick="searchVideos()">Search</button>
+        <div id="role-status">Spectating</div>
+        <div id="word-display">_ _ _ _</div>
+        <button id="start-round-btn" onclick="startNewRound()" style="background:#57f287; color:#000; padding:6px 12px; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">I Wanna Draw!</button>
     </header>
 
-    <div id="player-wrapper">
-        <iframe id="video-frame" allow="autoplay; encrypted-media; picture-in-picture" allowfullscreen></iframe>
+    <div class="main-container">
+        <div id="canvas-wrapper">
+            <canvas id="paintCanvas"></canvas>
+            
+            <div id="choice-modal">
+                <h2 style="margin-bottom: 8px;">Pick a Secret Word:</h2>
+                <div id="choices-container" style="display: flex; gap: 12px;"></div>
+            </div>
+        </div>
+
+        <div id="toolbar">
+            <div class="color-dot" style="background:#000000;" onclick="setColor('#000000')"></div>
+            <div class="color-dot" style="background:#ed4245;" onclick="setColor('#ed4245')"></div>
+            <div class="color-dot" style="background:#5865f2;" onclick="setColor('#5865f2')"></div>
+            <div class="color-dot" style="background:#57f287;" onclick="setColor('#57f287')"></div>
+            <div class="color-dot" style="background:#fee75c;" onclick="setColor('#fee75c')"></div>
+            <button class="btn-clear" onclick="clearCanvas()">Clear</button>
+        </div>
+
+        <div id="chat-section">
+            <div id="chat-messages"></div>
+            <div id="chat-input-row">
+                <input type="text" id="chat-input" placeholder="Type your guess..." onkeydown="if(event.key==='Enter') sendGuess()">
+                <button id="chat-btn" onclick="sendGuess()">Guess</button>
+            </div>
+        </div>
     </div>
 
-    <main id="feed"></main>
+    <script>
+        const WORD_POOL = [
+            "Apple", "Car", "House", "Tree", "Airplane", "Guitar", "Pizza", "Cat", "Dog",
+            "Elephant", "Bicycle", "Sun", "Moon", "Sword", "Computer", "Clock", "Helicopter",
+            "Spider", "Rocket", "Chair", "Door", "Ice Cream", "Camera", "Fish", "Pencil"
+        ];
+
+        let canvas, ctx;
+        let isDrawing = false;
+        let currentColor = "#000000";
+        let isDrawer = false;
+        let currentSecretWord = "";
+        let prevX = 0, prevY = 0;
+
+        window.onload = () => {
+            canvas = document.getElementById('paintCanvas');
+            ctx = canvas.getContext('2d');
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
+
+            // Pointer & Touch Drawing Listeners
+            canvas.addEventListener('mousedown', startStroke);
+            canvas.addEventListener('mousemove', moveStroke);
+            canvas.addEventListener('mouseup', () => isDrawing = false);
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const t = e.touches[0];
+                startStroke({ clientX: t.clientX, clientY: t.clientY });
+            });
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                const t = e.touches[0];
+                moveStroke({ clientX: t.clientX, clientY: t.clientY });
+            });
+            canvas.addEventListener('touchend', () => isDrawing = false);
+        };
+
+        function resizeCanvas() {
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+        }
+
+        function startStroke(e) {
+            if (!isDrawer) return;
+            isDrawing = true;
+            const rect = canvas.getBoundingClientRect();
+            prevX = (e.clientX - rect.left) / canvas.width;
+            prevY = (e.clientY - rect.top) / canvas.height;
+        }
+
+        function moveStroke(e) {
+            if (!isDrawing || !isDrawer) return;
+            const rect = canvas.getBoundingClientRect();
+            const currX = (e.clientX - rect.left) / canvas.width;
+            const currY = (e.clientY - rect.top) / canvas.height;
+
+            // Draw locally
+            drawLine(prevX, prevY, currX, currY, currentColor);
+
+            // Broadcast normalized stroke coordinates (0.0 to 1.0)
+            if (window.channel) {
+                window.channel.send({
+                    type: 'broadcast',
+                    event: 'stroke',
+                    payload: { x0: prevX, y0: prevY, x1: currX, y1: currY, color: currentColor }
+                });
+            }
+
+            prevX = currX;
+            prevY = currY;
+        }
+
+        window.drawLine = (x0, y0, x1, y1, color) => {
+            ctx.beginPath();
+            ctx.moveTo(x0 * canvas.width, y0 * canvas.height);
+            ctx.lineTo(x1 * canvas.width, y1 * canvas.height);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.lineCap = "round";
+            ctx.stroke();
+        };
+
+        window.setColor = (c) => currentColor = c;
+
+        window.rawClear = () => ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        window.clearCanvas = () => {
+            rawClear();
+            if (window.channel) {
+                window.channel.send({ type: 'broadcast', event: 'clear' });
+            }
+        };
+
+        window.startNewRound = () => {
+            isDrawer = true;
+            document.getElementById('toolbar').style.display = 'flex';
+            document.getElementById('role-status').innerText = "Pick a Word!";
+            rawClear();
+
+            const shuffled = [...WORD_POOL].sort(() => 0.5 - Math.random());
+            const choices = shuffled.slice(0, 3);
+
+            const modal = document.getElementById('choice-modal');
+            const container = document.getElementById('choices-container');
+            container.innerHTML = "";
+
+            choices.forEach(w => {
+                const btn = document.createElement('button');
+                btn.className = 'btn-choice';
+                btn.innerText = w;
+                btn.onclick = () => {
+                    modal.style.display = 'none';
+                    currentSecretWord = w;
+                    document.getElementById('word-display').innerText = w;
+                    document.getElementById('role-status').innerText = "You are Drawing!";
+
+                    if (window.channel) {
+                        window.channel.send({
+                            type: 'broadcast',
+                            event: 'new_round',
+                            payload: { wordLength: w.length, secretWord: w }
+                        });
+                        window.channel.send({ type: 'broadcast', event: 'clear' });
+                    }
+                };
+                container.appendChild(btn);
+            });
+
+            modal.style.display = 'flex';
+        };
+
+        window.onRemoteNewRound = (data) => {
+            isDrawer = false;
+            currentSecretWord = data.secretWord;
+            document.getElementById('toolbar').style.display = 'none';
+            document.getElementById('choice-modal').style.display = 'none';
+            document.getElementById('role-status').innerText = "Guess the Word!";
+            document.getElementById('word-display').innerText = "_ ".repeat(data.wordLength).trim();
+            rawClear();
+        };
+
+        window.sendGuess = () => {
+            const input = document.getElementById('chat-input');
+            const guess = input.value.trim();
+            if (!guess) return;
+
+            const isMatch = currentSecretWord && (guess.toLowerCase() === currentSecretWord.toLowerCase());
+            const text = isMatch ? "GUESSED THE WORD! 🎉" : guess;
+
+            appendChat(isDrawer ? "Drawer" : "You", text, isMatch);
+
+            if (window.channel) {
+                window.channel.send({
+                    type: 'broadcast',
+                    event: 'guess',
+                    payload: { sender: "Player", text, isCorrect: isMatch }
+                });
+            }
+
+            input.value = "";
+        };
+
+        window.appendChat = (sender, text, isCorrect) => {
+            const feed = document.getElementById('chat-messages');
+            const row = document.createElement('div');
+            row.className = isCorrect ? 'chat-correct' : 'chat-msg';
+            row.innerText = `${sender}: ${text}`;
+            feed.appendChild(row);
+            feed.scrollTop = feed.scrollHeight;
+        };
+    </script>
+</body>
+</html>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Aria Skribbl</title>
+
+    <!-- Discord Embedded App SDK -->
+    <script type="module">
+        import { DiscordSDK } from 'https://cdn.jsdelivr.net/npm/@discord/embedded-app-sdk@1.2.0/+esm';
+        try {
+            window.discordSdk = new DiscordSDK('YOUR_DISCORD_CLIENT_ID');
+            await window.discordSdk.ready();
+        } catch(e) {
+            console.log("Running outside Discord client environment");
+        }
+    </script>
+
+    <!-- Supabase JS Client via CDN -->
+    <script type="module">
+        import { createClient } from 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/+esm';
+
+        const SUPABASE_URL = 'https://hvnquoqpadrtuyzbosmd.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_1_OPff-uwu9rWTTNd3pR2g_yNqcy_T6';
+
+        const supabase = createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        // Connect to a broadcast room for the voice channel
+        const channel = supabase.channel('aria-skribbl-room', {
+            config: { broadcast: { self: false } }
+        });
+
+        window.channel = channel;
+
+        // Listen for canvas drawing strokes from others
+        channel.on('broadcast', { event: 'stroke' }, ({ payload }) => {
+            window.drawLine(payload.x0, payload.y0, payload.x1, payload.y1, payload.color);
+        });
+
+        // Listen for canvas clear events
+        channel.on('broadcast', { event: 'clear' }, () => {
+            window.rawClear();
+        });
+
+        // Listen for round starts and word choices
+        channel.on('broadcast', { event: 'new_round' }, ({ payload }) => {
+            window.onRemoteNewRound(payload);
+        });
+
+        // Listen for chat guesses
+        channel.on('broadcast', { event: 'guess' }, ({ payload }) => {
+            window.appendChat(payload.sender, payload.text, payload.isCorrect);
+        });
+
+        channel.subscribe((status) => {
+            if (status === 'SUBSCRIBED') {
+                console.log('Connected to Supabase Realtime Broadcast!');
+            }
+        });
+    </script>
+
+    <style>
+        * { box-sizing: border-box; margin: 0; padding: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+        body { background: #18191c; color: #fff; height: 100vh; display: flex; flex-direction: column; overflow: hidden; }
+        header { padding: 10px 16px; background: #2b2d31; display: flex; justify-content: space-between; align-items: center; border-bottom: 2px solid #1e1f22; z-index: 10; }
+        #word-display { font-size: 20px; font-weight: bold; letter-spacing: 4px; }
+        .main-container { flex: 1; display: flex; flex-direction: column; position: relative; }
+        #canvas-wrapper { flex: 1; background: #fff; position: relative; }
+        canvas { width: 100%; height: 100%; touch-action: none; cursor: crosshair; }
+        
+        #choice-modal { position: absolute; inset: 0; background: rgba(0,0,0,0.85); display: none; flex-direction: column; align-items: center; justify-content: center; gap: 16px; z-index: 20; }
+        .btn-choice { padding: 12px 24px; font-size: 18px; font-weight: bold; background: #5865f2; color: #fff; border: none; border-radius: 8px; cursor: pointer; }
+        .btn-choice:hover { background: #4752c4; }
+
+        #toolbar { background: #2b2d31; padding: 8px 12px; display: none; gap: 10px; align-items: center; border-top: 1px solid #1e1f22; }
+        .color-dot { width: 26px; height: 26px; border-radius: 50%; cursor: pointer; border: 2px solid #fff; }
+        .btn-clear { background: #ed4245; color: #fff; border: none; padding: 6px 12px; border-radius: 6px; cursor: pointer; margin-left: auto; }
+
+        #chat-section { height: 160px; background: #1e1f22; display: flex; flex-direction: column; }
+        #chat-messages { flex: 1; overflow-y: auto; padding: 8px 12px; font-size: 13px; display: flex; flex-direction: column; gap: 4px; }
+        .chat-msg { color: #dbdee1; }
+        .chat-correct { color: #57f287; font-weight: bold; }
+        #chat-input-row { display: flex; padding: 8px; background: #2b2d31; gap: 8px; }
+        #chat-input { flex: 1; padding: 8px 12px; border-radius: 4px; border: 1px solid #383a40; background: #1e1f22; color: #fff; outline: none; }
+        #chat-btn { background: #5865f2; color: #fff; border: none; padding: 0 16px; border-radius: 4px; cursor: pointer; font-weight: bold; }
+    </style>
+</head>
+<body>
+
+    <header>
+        <div id="role-status">Spectating</div>
+        <div id="word-display">_ _ _ _</div>
+        <button id="start-round-btn" onclick="startNewRound()" style="background:#57f287; color:#000; padding:6px 12px; border:none; border-radius:6px; font-weight:bold; cursor:pointer;">I Wanna Draw!</button>
+    </header>
+
+    <div class="main-container">
+        <div id="canvas-wrapper">
+            <canvas id="paintCanvas"></canvas>
+            
+            <div id="choice-modal">
+                <h2 style="margin-bottom: 8px;">Pick a Secret Word:</h2>
+                <div id="choices-container" style="display: flex; gap: 12px;"></div>
+            </div>
+        </div>
+
+        <div id="toolbar">
+            <div class="color-dot" style="background:#000000;" onclick="setColor('#000000')"></div>
+            <div class="color-dot" style="background:#ed4245;" onclick="setColor('#ed4245')"></div>
+            <div class="color-dot" style="background:#5865f2;" onclick="setColor('#5865f2')"></div>
+            <div class="color-dot" style="background:#57f287;" onclick="setColor('#57f287')"></div>
+            <div class="color-dot" style="background:#fee75c;" onclick="setColor('#fee75c')"></div>
+            <button class="btn-clear" onclick="clearCanvas()">Clear</button>
+        </div>
+
+        <div id="chat-section">
+            <div id="chat-messages"></div>
+            <div id="chat-input-row">
+                <input type="text" id="chat-input" placeholder="Type your guess..." onkeydown="if(event.key==='Enter') sendGuess()">
+                <button id="chat-btn" onclick="sendGuess()">Guess</button>
+            </div>
+        </div>
+    </div>
 
     <script>
-        async function searchVideos() {
-            const query = document.getElementById('query').value.trim();
-            if (!query) return;
+        const WORD_POOL = [
+            "Apple", "Car", "House", "Tree", "Airplane", "Guitar", "Pizza", "Cat", "Dog",
+            "Elephant", "Bicycle", "Sun", "Moon", "Sword", "Computer", "Clock", "Helicopter",
+            "Spider", "Rocket", "Chair", "Door", "Ice Cream", "Camera", "Fish", "Pencil"
+        ];
 
-            const feed = document.getElementById('feed');
-            feed.innerHTML = '<p style="padding: 16px; color: #888;">Searching...</p>';
+        let canvas, ctx;
+        let isDrawing = false;
+        let currentColor = "#000000";
+        let isDrawer = false;
+        let currentSecretWord = "";
+        let prevX = 0, prevY = 0;
 
-            try {
-                // Route through Discord's local proxy to avoid CSP fetch block
-                const res = await fetch(`/.proxy/api/api/v1/search?q=${encodeURIComponent(query)}`);
-                const items = await res.json();
-                
-                feed.innerHTML = '';
-                if (!items || items.length === 0) {
-                    feed.innerHTML = '<p style="padding: 16px; color: #888;">No results found.</p>';
-                    return;
-                }
+        window.onload = () => {
+            canvas = document.getElementById('paintCanvas');
+            ctx = canvas.getContext('2d');
+            resizeCanvas();
+            window.addEventListener('resize', resizeCanvas);
 
-                items.forEach(video => {
-                    if (video.type !== 'video') return;
-                    const card = document.createElement('div');
-                    card.className = 'card';
-                    card.onclick = () => playVideo(video.videoId);
-                    
-                    const isLive = video.liveNow;
-                    card.innerHTML = `
-                        ${isLive ? '<span class="badge">LIVE</span>' : ''}
-                        <img src="https://i.ytimg.com/vi/${video.videoId}/mqdefault.jpg" loading="lazy">
-                        <div class="card-info">
-                            <div class="card-title">${video.title}</div>
-                            <div class="card-author">${video.author}</div>
-                        </div>
-                    `;
-                    feed.appendChild(card);
+            // Pointer & Touch Drawing Listeners
+            canvas.addEventListener('mousedown', startStroke);
+            canvas.addEventListener('mousemove', moveStroke);
+            canvas.addEventListener('mouseup', () => isDrawing = false);
+            canvas.addEventListener('touchstart', (e) => {
+                e.preventDefault();
+                const t = e.touches[0];
+                startStroke({ clientX: t.clientX, clientY: t.clientY });
+            });
+            canvas.addEventListener('touchmove', (e) => {
+                e.preventDefault();
+                const t = e.touches[0];
+                moveStroke({ clientX: t.clientX, clientY: t.clientY });
+            });
+            canvas.addEventListener('touchend', () => isDrawing = false);
+        };
+
+        function resizeCanvas() {
+            const rect = canvas.getBoundingClientRect();
+            canvas.width = rect.width;
+            canvas.height = rect.height;
+        }
+
+        function startStroke(e) {
+            if (!isDrawer) return;
+            isDrawing = true;
+            const rect = canvas.getBoundingClientRect();
+            prevX = (e.clientX - rect.left) / canvas.width;
+            prevY = (e.clientY - rect.top) / canvas.height;
+        }
+
+        function moveStroke(e) {
+            if (!isDrawing || !isDrawer) return;
+            const rect = canvas.getBoundingClientRect();
+            const currX = (e.clientX - rect.left) / canvas.width;
+            const currY = (e.clientY - rect.top) / canvas.height;
+
+            // Draw locally
+            drawLine(prevX, prevY, currX, currY, currentColor);
+
+            // Broadcast normalized stroke coordinates (0.0 to 1.0)
+            if (window.channel) {
+                window.channel.send({
+                    type: 'broadcast',
+                    event: 'stroke',
+                    payload: { x0: prevX, y0: prevY, x1: currX, y1: currY, color: currentColor }
                 });
-            } catch (err) {
-                feed.innerHTML = '<p style="padding: 16px; color: #f55;">Connection failed. Check proxy mappings.</p>';
             }
+
+            prevX = currX;
+            prevY = currY;
         }
 
-        function playVideo(id) {
-            const wrapper = document.getElementById('player-wrapper');
-            const frame = document.getElementById('video-frame');
-            wrapper.style.display = 'block';
-            // enablejsapi=1 and rel=0 give clean player controls and live handling
-            frame.src = `https://www.youtube.com/embed/${id}?autoplay=1&enablejsapi=1&rel=0`;
-            window.scrollTo({ top: 0, behavior: 'smooth' });
-        }
+        window.drawLine = (x0, y0, x1, y1, color) => {
+            ctx.beginPath();
+            ctx.moveTo(x0 * canvas.width, y0 * canvas.height);
+            ctx.lineTo(x1 * canvas.width, y1 * canvas.height);
+            ctx.strokeStyle = color;
+            ctx.lineWidth = 3;
+            ctx.lineCap = "round";
+            ctx.stroke();
+        };
+
+        window.setColor = (c) => currentColor = c;
+
+        window.rawClear = () => ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+        window.clearCanvas = () => {
+            rawClear();
+            if (window.channel) {
+                window.channel.send({ type: 'broadcast', event: 'clear' });
+            }
+        };
+
+        window.startNewRound = () => {
+            isDrawer = true;
+            document.getElementById('toolbar').style.display = 'flex';
+            document.getElementById('role-status').innerText = "Pick a Word!";
+            rawClear();
+
+            const shuffled = [...WORD_POOL].sort(() => 0.5 - Math.random());
+            const choices = shuffled.slice(0, 3);
+
+            const modal = document.getElementById('choice-modal');
+            const container = document.getElementById('choices-container');
+            container.innerHTML = "";
+
+            choices.forEach(w => {
+                const btn = document.createElement('button');
+                btn.className = 'btn-choice';
+                btn.innerText = w;
+                btn.onclick = () => {
+                    modal.style.display = 'none';
+                    currentSecretWord = w;
+                    document.getElementById('word-display').innerText = w;
+                    document.getElementById('role-status').innerText = "You are Drawing!";
+
+                    if (window.channel) {
+                        window.channel.send({
+                            type: 'broadcast',
+                            event: 'new_round',
+                            payload: { wordLength: w.length, secretWord: w }
+                        });
+                        window.channel.send({ type: 'broadcast', event: 'clear' });
+                    }
+                };
+                container.appendChild(btn);
+            });
+
+            modal.style.display = 'flex';
+        };
+
+        window.onRemoteNewRound = (data) => {
+            isDrawer = false;
+            currentSecretWord = data.secretWord;
+            document.getElementById('toolbar').style.display = 'none';
+            document.getElementById('choice-modal').style.display = 'none';
+            document.getElementById('role-status').innerText = "Guess the Word!";
+            document.getElementById('word-display').innerText = "_ ".repeat(data.wordLength).trim();
+            rawClear();
+        };
+
+        window.sendGuess = () => {
+            const input = document.getElementById('chat-input');
+            const guess = input.value.trim();
+            if (!guess) return;
+
+            const isMatch = currentSecretWord && (guess.toLowerCase() === currentSecretWord.toLowerCase());
+            const text = isMatch ? "GUESSED THE WORD! 🎉" : guess;
+
+            appendChat(isDrawer ? "Drawer" : "You", text, isMatch);
+
+            if (window.channel) {
+                window.channel.send({
+                    type: 'broadcast',
+                    event: 'guess',
+                    payload: { sender: "Player", text, isCorrect: isMatch }
+                });
+            }
+
+            input.value = "";
+        };
+
+        window.appendChat = (sender, text, isCorrect) => {
+            const feed = document.getElementById('chat-messages');
+            const row = document.createElement('div');
+            row.className = isCorrect ? 'chat-correct' : 'chat-msg';
+            row.innerText = `${sender}: ${text}`;
+            feed.appendChild(row);
+            feed.scrollTop = feed.scrollHeight;
+        };
     </script>
 </body>
 </html>
